@@ -1,0 +1,29 @@
+# Build directories
+build/
+bin/
+obj/
+
+# Compiled files
+*.o
+*.obj
+*.exe
+cuda_opengl_test
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
