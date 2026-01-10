@@ -187,21 +187,22 @@ __global__ void update_particles_kernel(Particles particles, UniformGrid grid,
                     // Only collide if particles are approaching
                     if (dvn <= 0) continue;
                     
-                    float impulse = (2.0f * dvn) / (mass + other_mass);
+                    // Slightly inelastic collision to prevent energy buildup
+                    const float restitution = 0.9f;
+                    float impulse = ((1.0f + restitution) * dvn) / (mass + other_mass);
                     vx -= impulse * other_mass * nx;
                     vy -= impulse * other_mass * ny;
                     
-                    // Separate overlapping particles (push apart by half overlap each)
+                    // Separate overlapping particles to prevent repeated collisions
                     float overlap = min_dist - dist;
-                    float separation = overlap * 0.5f;
-                    x -= separation * nx;
-                    y -= separation * ny;
+                    x -= overlap * 0.5f * nx;
+                    y -= overlap * 0.5f * ny;
                 }
             }
         }
     }
     
-    float gravity = 0.05f;
+    float gravity = 0.15f;
     vy += -gravity * dt;
             
     x += vx * dt;
