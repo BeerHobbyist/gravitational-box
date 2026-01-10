@@ -30,6 +30,9 @@ public:
     unsigned int getWidth() const { return m_width; }
     unsigned int getHeight() const { return m_height; }
     
+    // Resize buffers for new window dimensions
+    void resize(unsigned int newWidth, unsigned int newHeight);
+
 private:
     unsigned int m_width;
     unsigned int m_height;

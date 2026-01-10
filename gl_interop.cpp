@@ -71,6 +71,36 @@ void GLCudaInterop::updateTexture() {
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+void GLCudaInterop::resize(unsigned int newWidth, unsigned int newHeight) {
+    if (newWidth == m_width && newHeight == m_height) return;
+    if (newWidth == 0 || newHeight == 0) return;  // Ignore minimized windows
+    
+    // Unregister the old CUDA resource
+    if (m_cudaResource) {
+        cudaGraphicsUnregisterResource(m_cudaResource);
+        m_cudaResource = nullptr;
+    }
+    
+    // Resize the PBO
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbo);
+    glBufferData(GL_PIXEL_UNPACK_BUFFER, newWidth * newHeight * sizeof(float4), nullptr, GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+    
+    // Re-register PBO with CUDA
+    checkCudaError(
+        cudaGraphicsGLRegisterBuffer(&m_cudaResource, m_pbo, cudaGraphicsMapFlagsWriteDiscard),
+        "cudaGraphicsGLRegisterBuffer (resize)"
+    );
+    
+    // Resize the texture
+    glBindTexture(GL_TEXTURE_2D, m_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, newWidth, newHeight, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    
+    m_width = newWidth;
+    m_height = newHeight;
+}
+
 void GLCudaInterop::checkCudaError(cudaError_t error, const char* msg) {
     if (error != cudaSuccess) {
         std::cerr << "CUDA Error (" << msg << "): " << cudaGetErrorString(error) << std::endl;

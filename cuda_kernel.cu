@@ -130,16 +130,22 @@ __global__ void update_particles_kernel(Particles particles, UniformGrid grid,
     unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_particles) return;
     
-    float x = particles.x[idx];
-    float y = particles.y[idx];
-    float vx = particles.vx[idx];
-    float vy = particles.vy[idx];
+    // Read original state (used for all collision calculations)
+    const float orig_x = particles.x[idx];
+    const float orig_y = particles.y[idx];
+    const float orig_vx = particles.vx[idx];
+    const float orig_vy = particles.vy[idx];
     float radius = particles.radius[idx];
     float mass = particles.mass[idx];
     
+    // Accumulators for collision response (applied after all collisions detected)
+    float corr_x = 0.0f;
+    float corr_y = 0.0f;
+    float imp_vx = 0.0f;
+    float imp_vy = 0.0f;
 
-    int cell_x = (int)((x + 1.0f) / grid.cell_size);
-    int cell_y = (int)((y + 1.0f) / grid.cell_size);
+    int cell_x = (int)((orig_x + 1.0f) / grid.cell_size);
+    int cell_y = (int)((orig_y + 1.0f) / grid.cell_size);
     cell_x = max(0, min(cell_x, grid.grid_width - 1));
     cell_y = max(0, min(cell_y, grid.grid_height - 1));
     
@@ -161,7 +167,7 @@ __global__ void update_particles_kernel(Particles particles, UniformGrid grid,
                 int other_idx = grid.particle_indices[start + i];
                 if (other_idx == idx) continue;  // Skip self
                 
-                // Load other particle data
+                // Load other particle data (original positions from array)
                 float other_x = particles.x[other_idx];
                 float other_y = particles.y[other_idx];
                 float other_vx = particles.vx[other_idx];
@@ -169,8 +175,9 @@ __global__ void update_particles_kernel(Particles particles, UniformGrid grid,
                 float other_radius = particles.radius[other_idx];
                 float other_mass = particles.mass[other_idx];
                 
-                float dx = other_x - x;
-                float dy = other_y - y;
+                // Use original positions for collision detection
+                float dx = other_x - orig_x;
+                float dy = other_y - orig_y;
                 float dist_sq = dx * dx + dy * dy;
                 float min_dist = radius + other_radius;
                 
@@ -180,8 +187,9 @@ __global__ void update_particles_kernel(Particles particles, UniformGrid grid,
                     float nx = dx / dist;
                     float ny = dy / dist;
                     
-                    float dvx = vx - other_vx;
-                    float dvy = vy - other_vy;
+                    // Use original velocities for impulse calculation
+                    float dvx = orig_vx - other_vx;
+                    float dvy = orig_vy - other_vy;
                     float dvn = dvx * nx + dvy * ny;
                     
                     // Only collide if particles are approaching
@@ -190,17 +198,23 @@ __global__ void update_particles_kernel(Particles particles, UniformGrid grid,
                     // Slightly inelastic collision to prevent energy buildup
                     const float restitution = 0.9f;
                     float impulse = ((1.0f + restitution) * dvn) / (mass + other_mass);
-                    vx -= impulse * other_mass * nx;
-                    vy -= impulse * other_mass * ny;
+                    imp_vx -= impulse * other_mass * nx;
+                    imp_vy -= impulse * other_mass * ny;
                     
-                    // Separate overlapping particles to prevent repeated collisions
+                    // Accumulate position correction to separate overlapping particles
                     float overlap = min_dist - dist;
-                    x -= overlap * 0.5f * nx;
-                    y -= overlap * 0.5f * ny;
+                    corr_x -= overlap * 0.5f * nx;
+                    corr_y -= overlap * 0.5f * ny;
                 }
             }
         }
     }
+    
+    // Apply accumulated collision response
+    float x = orig_x + corr_x;
+    float y = orig_y + corr_y;
+    float vx = orig_vx + imp_vx;
+    float vy = orig_vy + imp_vy;
     
     float gravity = 0.15f;
     vy += -gravity * dt;
@@ -240,7 +254,8 @@ __global__ void clear_screen_kernel(float4* output, unsigned int width, unsigned
 }
 
 __global__ void render_particles_kernel(Particles particles, unsigned int num_particles,
-                                       float4* output, unsigned int width, unsigned int height) {
+                                       float4* output, unsigned int width, unsigned int height,
+                                       unsigned int ref_width) {
     unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_particles) return;
     
@@ -254,7 +269,8 @@ __global__ void render_particles_kernel(Particles particles, unsigned int num_pa
     int center_x = (int)((px + 1.0f) * 0.5f * width + 0.5f);
     int center_y = (int)((py + 1.0f) * 0.5f * height + 0.5f);
     
-    float pixel_radius_f = radius * width * 0.5f;
+    // Use reference width for radius so particle pixel size stays constant across resizes
+    float pixel_radius_f = radius * ref_width * 0.5f;
     int pixel_radius = (int)(pixel_radius_f + 0.5f);
     if (pixel_radius < 1) pixel_radius = 1;
     
@@ -275,7 +291,7 @@ __global__ void render_particles_kernel(Particles particles, unsigned int num_pa
 
 void update_and_render(Particles* d_particles, UniformGrid* d_grid, unsigned int num_particles,
                        float4* d_output, unsigned int width, unsigned int height,
-                       float dt) {
+                       unsigned int ref_width, float dt) {
     
     LaunchConfig config = get_optimal_config();
     
@@ -311,7 +327,7 @@ void update_and_render(Particles* d_particles, UniformGrid* d_grid, unsigned int
         int blockSize = config.blockSize1D;
         int gridSize = (num_particles + blockSize - 1) / blockSize;
         render_particles_kernel<<<gridSize, blockSize>>>(*d_particles, num_particles,
-                                                         d_output, width, height);
+                                                         d_output, width, height, ref_width);
     }
     
     cudaError_t error = cudaGetLastError();

@@ -45,7 +45,7 @@ void renderFrame(float dt) {
     float4* d_output = g_interop->mapBuffer();
     
     update_and_render(&d_particles, &d_grid, NUM_PARTICLES, d_output,
-                     g_interop->getWidth(), g_interop->getHeight(), dt);
+                     g_interop->getWidth(), g_interop->getHeight(), WINDOW_WIDTH, dt);
     
     g_interop->unmapBuffer();
     g_interop->updateTexture();
@@ -82,6 +82,16 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
     }
 }
 
+void framebufferSizeCallback(GLFWwindow* window, int width, int height) {
+    if (width == 0 || height == 0) return;  // Ignore minimized windows
+    
+    glViewport(0, 0, width, height);
+    
+    if (g_interop) {
+        g_interop->resize(static_cast<unsigned int>(width), static_cast<unsigned int>(height));
+    }
+}
+
 int main() {
     if (!glfwInit()) {
         std::cerr << "Failed to initialize GLFW" << std::endl;
@@ -98,6 +108,7 @@ int main() {
     glfwMakeContextCurrent(window);
     glfwSwapInterval(0);
     glfwSetKeyCallback(window, keyCallback);
+    glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
     
     glewExperimental = GL_TRUE;
     if (glewInit() != GLEW_OK) {
@@ -119,9 +130,6 @@ int main() {
         double currentTime = glfwGetTime();
         float dt = static_cast<float>(currentTime - lastTime);
         lastTime = currentTime;
-        
-        // Cap delta time to avoid large jumps
-        if (dt > 0.05f) dt = 0.016f;
         
         renderFrame(dt);
         

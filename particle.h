@@ -3,7 +3,6 @@
 
 #include <cuda_runtime.h>
 
-// Structure of Arrays for coalesced memory access
 struct Particles {
     float* x;        // Position X array
     float* y;        // Position Y array
@@ -14,9 +13,9 @@ struct Particles {
 };
 
 // Simulation constants
-#define NUM_PARTICLES 100000
+#define NUM_PARTICLES 150000
 #define MIN_RADIUS 0.001f
-#define MAX_RADIUS 0.002f
+#define MAX_RADIUS 0.001f
 #define MAX_VELOCITY 0.1f
 
 inline void allocate_particles(Particles* p, unsigned int num) {
