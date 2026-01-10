@@ -14,8 +14,8 @@ struct Particles {
 
 // Simulation constants
 #define NUM_PARTICLES 150000
-#define MIN_RADIUS 0.001f
-#define MAX_RADIUS 0.001f
+#define MIN_RADIUS 0.0028f
+#define MAX_RADIUS 0.003f
 #define MAX_VELOCITY 0.1f
 
 inline void allocate_particles(Particles* p, unsigned int num) {

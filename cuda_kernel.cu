@@ -143,6 +143,7 @@ __global__ void update_particles_kernel(Particles particles, UniformGrid grid,
     float corr_y = 0.0f;
     float imp_vx = 0.0f;
     float imp_vy = 0.0f;
+    int collision_count = 0;
 
     int cell_x = (int)((orig_x + 1.0f) / grid.cell_size);
     int cell_y = (int)((orig_y + 1.0f) / grid.cell_size);
@@ -196,27 +197,48 @@ __global__ void update_particles_kernel(Particles particles, UniformGrid grid,
                     if (dvn <= 0) continue;
                     
                     // Slightly inelastic collision to prevent energy buildup
-                    const float restitution = 0.9f;
+                    const float restitution = 1.0f;
                     float impulse = ((1.0f + restitution) * dvn) / (mass + other_mass);
                     imp_vx -= impulse * other_mass * nx;
                     imp_vy -= impulse * other_mass * ny;
                     
-                    // Accumulate position correction to separate overlapping particles
+                    // // Accumulate position correction to separate overlapping particles
                     float overlap = min_dist - dist;
                     corr_x -= overlap * 0.5f * nx;
                     corr_y -= overlap * 0.5f * ny;
+                    collision_count++;
                 }
             }
         }
+
     }
     
-    // Apply accumulated collision response
+    // Apply accumulated collision response, averaged if multiple collisions
+    // This prevents energy explosion when many particles overlap
+    if (collision_count > 1) {
+        float inv_count = 2.5f / collision_count;
+        corr_x *= inv_count;
+        corr_y *= inv_count;
+        imp_vx *= inv_count;
+        imp_vy *= inv_count;
+    }
+    
+    // Clamp maximum velocity change to prevent explosions
+    const float max_dv = 0.5f;
+    imp_vx = fmaxf(-max_dv, fminf(max_dv, imp_vx));
+    imp_vy = fmaxf(-max_dv, fminf(max_dv, imp_vy));
+    
+    // Clamp maximum position correction
+    const float max_corr = 0.05f;
+    corr_x = fmaxf(-max_corr, fminf(max_corr, corr_x));
+    corr_y = fmaxf(-max_corr, fminf(max_corr, corr_y));
+    
     float x = orig_x + corr_x;
     float y = orig_y + corr_y;
     float vx = orig_vx + imp_vx;
     float vy = orig_vy + imp_vy;
     
-    float gravity = 0.15f;
+    float gravity = 0.05f;
     vy += -gravity * dt;
             
     x += vx * dt;
