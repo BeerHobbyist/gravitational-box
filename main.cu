@@ -36,8 +36,6 @@ void initCuda() {
     // Initialize particles
     init_particles(&d_particles, NUM_PARTICLES);
     cudaDeviceSynchronize();
-    
-    std::cout << "Particles initialized (SoA layout)\n" << std::endl;
 }
 
 void renderFrame(float dt) {
