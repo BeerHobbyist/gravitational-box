@@ -38,10 +38,6 @@ LaunchConfig get_optimal_config() {
     return config;
 }
 
-// ============================================================================
-// INITIALIZATION
-// ============================================================================
-
 __global__ void init_particles_kernel(Particles particles, unsigned int num_particles, unsigned long seed) {
     unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_particles) return;
@@ -168,7 +164,6 @@ __global__ void update_particles_kernel(Particles particles, UniformGrid grid,
                 int other_idx = grid.particle_indices[start + i];
                 if (other_idx == idx) continue;  // Skip self
                 
-                // Load other particle data (original positions from array)
                 float other_x = particles.x[other_idx];
                 float other_y = particles.y[other_idx];
                 float other_vx = particles.vx[other_idx];
@@ -176,7 +171,6 @@ __global__ void update_particles_kernel(Particles particles, UniformGrid grid,
                 float other_radius = particles.radius[other_idx];
                 float other_mass = particles.mass[other_idx];
                 
-                // Use original positions for collision detection
                 float dx = other_x - orig_x;
                 float dy = other_y - orig_y;
                 float dist_sq = dx * dx + dy * dy;
@@ -188,7 +182,6 @@ __global__ void update_particles_kernel(Particles particles, UniformGrid grid,
                     float nx = dx / dist;
                     float ny = dy / dist;
                     
-                    // Use original velocities for impulse calculation
                     float dvx = orig_vx - other_vx;
                     float dvy = orig_vy - other_vy;
                     float dvn = dvx * nx + dvy * ny;
@@ -197,26 +190,30 @@ __global__ void update_particles_kernel(Particles particles, UniformGrid grid,
                     if (dvn <= 0) continue;
                     
                     // Slightly inelastic collision to prevent energy buildup
-                    const float restitution = 1.0f;
+                    const float restitution = 0.95f;
                     float impulse = ((1.0f + restitution) * dvn) / (mass + other_mass);
                     imp_vx -= impulse * other_mass * nx;
                     imp_vy -= impulse * other_mass * ny;
                     
-                    // // Accumulate position correction to separate overlapping particles
+                    // Accumulate position correction to separate overlapping particles.
+                    // Using a "soft" correction (<1) to avoid big dense clusters exploding.
+                    const float position_correction_strength = 0.5f;
                     float overlap = min_dist - dist;
-                    corr_x -= overlap * 0.5f * nx;
-                    corr_y -= overlap * 0.5f * ny;
+                    corr_x -= overlap * 0.5f * position_correction_strength * nx;
+                    corr_y -= overlap * 0.5f * position_correction_strength * ny;
                     collision_count++;
                 }
             }
+
         }
+
 
     }
     
     // Apply accumulated collision response, averaged if multiple collisions
     // This prevents energy explosion when many particles overlap
     if (collision_count > 1) {
-        float inv_count = 2.5f / collision_count;
+        float inv_count = 1.0f / collision_count;
         corr_x *= inv_count;
         corr_y *= inv_count;
         imp_vx *= inv_count;
@@ -238,7 +235,7 @@ __global__ void update_particles_kernel(Particles particles, UniformGrid grid,
     float vx = orig_vx + imp_vx;
     float vy = orig_vy + imp_vy;
     
-    float gravity = 0.05f;
+    float gravity = 0.15f;
     vy += -gravity * dt;
             
     x += vx * dt;

@@ -13,10 +13,10 @@ struct Particles {
 };
 
 // Simulation constants
-#define NUM_PARTICLES 150000
+#define NUM_PARTICLES 120000
 #define MIN_RADIUS 0.0028f
 #define MAX_RADIUS 0.003f
-#define MAX_VELOCITY 0.1f
+#define MAX_VELOCITY 0.5f
 
 inline void allocate_particles(Particles* p, unsigned int num) {
     cudaMalloc(&p->x, num * sizeof(float));
