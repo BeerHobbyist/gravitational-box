@@ -13,7 +13,6 @@ const unsigned int WINDOW_WIDTH = 1440;
 const unsigned int WINDOW_HEIGHT = 1024;
 const char* WINDOW_TITLE = "Gravitational Box";
 
-// Global state
 GLCudaInterop* g_interop = nullptr;
 Particles d_particles;
 UniformGrid d_grid;
@@ -110,7 +109,6 @@ int main() {
     glfwSetKeyCallback(window, keyCallback);
     glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
     
-    glewExperimental = GL_TRUE;
     if (glewInit() != GLEW_OK) {
         std::cerr << "Failed to initialize GLEW" << std::endl;
         return -1;
