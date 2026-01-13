@@ -5,8 +5,8 @@
 #include "particle.h"
 #include "grid.h"
 
-// Initialize particles with random positions and velocities
-void init_particles(Particles* d_particles, unsigned int num_particles);
+// Initialize particles with deterministic seed
+void init_particles(Particles* d_particles, unsigned int num_particles, unsigned long seed);
 
 // Update particle positions and render to output buffer
 // ref_width: reference width for consistent particle pixel size across resizes
@@ -15,3 +15,4 @@ void update_and_render(Particles* d_particles, UniformGrid* d_grid, unsigned int
                        unsigned int ref_width, float dt);
 
 #endif // CUDA_KERNEL_CUH
+
