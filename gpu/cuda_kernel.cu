@@ -236,6 +236,35 @@ __global__ void clear_screen_kernel(float4* output, unsigned int width, unsigned
     output[y * width + x] = make_float4(0.0f, 0.0f, 0.0f, 1.0f);
 }
 
+__device__ void draw_circle(float4* output, unsigned int width, unsigned int height,
+                            int center_x, int center_y, float pixel_radius_f, float3 color) {
+    int pixel_radius = (int)(pixel_radius_f + 0.5f);
+    if (pixel_radius < 1) pixel_radius = 1;
+
+    for (int dy = -pixel_radius - 1; dy <= pixel_radius + 1; dy++) {
+        for (int dx = -pixel_radius - 1; dx <= pixel_radius + 1; dx++) {
+            int px_coord = center_x + dx;
+            int py_coord = center_y + dy;
+
+            if (px_coord < 0 || px_coord >= (int)width || py_coord < 0 || py_coord >= (int)height)
+                continue;
+
+            float dist = sqrtf((float)(dx * dx + dy * dy));
+            float alpha = fminf(1.0f, fmaxf(0.0f, pixel_radius_f + 0.5f - dist));
+
+            if (alpha > 0.0f) {
+                float4 existing = output[py_coord * width + px_coord];
+                float inv_alpha = 1.0f - alpha;
+                output[py_coord * width + px_coord] = make_float4(
+                    alpha * color.x + inv_alpha * existing.x,
+                    alpha * color.y + inv_alpha * existing.y,
+                    alpha * color.z + inv_alpha * existing.z,
+                    1.0f);
+            }
+        }
+    }
+}
+
 __global__ void render_particles_kernel(Particles particles, unsigned int num_particles,
                                         float4* output, unsigned int width, unsigned int height,
                                         unsigned int ref_height,
@@ -248,32 +277,15 @@ __global__ void render_particles_kernel(Particles particles, unsigned int num_pa
     float py = particles.y[idx];
     float radius = particles.radius[idx];
 
-    float3 color = make_float3(1.0f, 1.0f, 1.0f);
-
-    // Convert world position to screen coordinates using world bounds
     float world_width = world_max_x - world_min_x;
     float world_height = world_max_y - world_min_y;
     int center_x = (int)((px - world_min_x) / world_width * width + 0.5f);
     int center_y = (int)((py - world_min_y) / world_height * height + 0.5f);
 
-    // Use reference height for radius (Y is always [-1,1] so height is the stable reference)
     float pixel_radius_f = radius * ref_height * 0.5f;
-    int pixel_radius = (int)(pixel_radius_f + 0.5f);
-    if (pixel_radius < 1) pixel_radius = 1;
+    float3 color = make_float3(1.0f, 1.0f, 1.0f);
 
-    for (int dy = -pixel_radius; dy <= pixel_radius; dy++) {
-        for (int dx = -pixel_radius; dx <= pixel_radius; dx++) {
-            int px_coord = center_x + dx;
-            int py_coord = center_y + dy;
-
-            if (px_coord < 0 || px_coord >= (int)width || py_coord < 0 || py_coord >= (int)height)
-                continue;
-
-            if (dx * dx + dy * dy < pixel_radius * pixel_radius) {
-                output[py_coord * width + px_coord] = make_float4(color.x, color.y, color.z, 1.0f);
-            }
-        }
-    }
+    draw_circle(output, width, height, center_x, center_y, pixel_radius_f, color);
 }
 
 void update_and_render(Particles* d_particles, UniformGrid* d_grid, unsigned int num_particles,
