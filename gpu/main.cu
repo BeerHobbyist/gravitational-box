@@ -27,16 +27,16 @@ void initCuda() {
 
     cudaSetDevice(0);
 
+    // Calculate aspect ratio for physics space
+    float aspect_ratio = static_cast<float>(WINDOW_WIDTH) / static_cast<float>(WINDOW_HEIGHT);
+
     // Allocate particle arrays on device (SoA for coalesced access)
     allocate_particles(&d_particles, NUM_PARTICLES);
 
-    // Allocate uniform grid for spatial partitioning
-    allocate_grid(&d_grid, NUM_PARTICLES);
-    std::cout << "Grid: " << d_grid.grid_width << "×" << d_grid.grid_height
-              << " cells (cell_size=" << d_grid.cell_size << ")" << std::endl;
-
-    // Initialize particles
-    init_particles(&d_particles, NUM_PARTICLES, DEFAULT_SEED);
+    allocate_grid(&d_grid, NUM_PARTICLES, aspect_ratio);
+    update_grid_aspect_ratio(&d_grid, aspect_ratio);
+    // Initialize particles (spawn in a circle that fits in both orientations)
+    init_particles(&d_particles, NUM_PARTICLES, DEFAULT_SEED, aspect_ratio);
     cudaDeviceSynchronize();
 }
 
@@ -44,7 +44,7 @@ void renderFrame(float dt) {
     float4* d_output = g_interop->mapBuffer();
 
     update_and_render(&d_particles, &d_grid, NUM_PARTICLES, d_output,
-                      g_interop->getWidth(), g_interop->getHeight(), WINDOW_WIDTH, dt);
+                      g_interop->getWidth(), g_interop->getHeight(), WINDOW_HEIGHT, dt);
 
     g_interop->unmapBuffer();
     g_interop->updateTexture();
@@ -88,6 +88,10 @@ void framebufferSizeCallback(GLFWwindow* window, int width, int height) {
     if (width == 0 || height == 0) return;  // Ignore minimized windows
 
     glViewport(0, 0, width, height);
+
+    // Update physics space for new aspect ratio
+    float aspect_ratio = static_cast<float>(width) / static_cast<float>(height);
+    update_grid_aspect_ratio(&d_grid, aspect_ratio);
 
     if (g_interop) {
         g_interop->resize(static_cast<unsigned int>(width), static_cast<unsigned int>(height));

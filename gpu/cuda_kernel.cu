@@ -4,40 +4,8 @@
 #include <cstdio>
 #include <thrust/sort.h>
 
-// Query optimal launch configuration based on device properties
-struct LaunchConfig {
-    int blockSize1D;      // For 1D kernels (particles)
-    dim3 blockSize2D;     // For 2D kernels (screen)
-    int maxThreadsPerBlock;
-    int warpSize;
-};
 
-static LaunchConfig get_optimal_config() {
-    static LaunchConfig config = {0, dim3(0, 0), 0, 0};
-
-    if (config.maxThreadsPerBlock == 0) {
-        cudaDeviceProp prop;
-        cudaGetDeviceProperties(&prop, 0);
-
-        config.maxThreadsPerBlock = prop.maxThreadsPerBlock;
-        config.warpSize = prop.warpSize;
-
-        config.blockSize1D = (prop.maxThreadsPerBlock / prop.warpSize) * prop.warpSize;
-
-        int block2D = 16;
-        while (block2D * block2D > prop.maxThreadsPerBlock) {
-            block2D /= 2;
-        }
-        config.blockSize2D = dim3(block2D, block2D);
-
-        printf("Optimal config: 1D blocks=%d, 2D blocks=(%d,%d), warpSize=%d\n",
-               config.blockSize1D, block2D, block2D, config.warpSize);
-    }
-
-    return config;
-}
-
-__global__ void init_particles_kernel(Particles particles, unsigned int num_particles, unsigned long seed) {
+__global__ void init_particles_kernel(Particles particles, unsigned int num_particles, unsigned long seed, float aspect_ratio) {
     unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_particles) return;
 
@@ -49,7 +17,8 @@ __global__ void init_particles_kernel(Particles particles, unsigned int num_part
     float r_norm = (num_particles > 1) ? sqrtf((float)idx / (float)(num_particles - 1)) : 0.0f;
     float dist = r_norm * circle_radius;
 
-    particles.x[idx] = dist * cosf(angle);
+    // Scale X by aspect ratio to fit in the wider physics space
+    particles.x[idx] = dist * cosf(angle) * aspect_ratio;
     particles.y[idx] = dist * sinf(angle);
 
     curandState state;
@@ -63,13 +32,12 @@ __global__ void init_particles_kernel(Particles particles, unsigned int num_part
     particles.mass[idx] = particle_radius * particle_radius; // Mass proportional to area
 }
 
-void init_particles(Particles* d_particles, unsigned int num_particles, unsigned long seed) {
-    LaunchConfig config = get_optimal_config();
-
-    int blockSize = config.blockSize1D;
+void init_particles(Particles* d_particles, unsigned int num_particles, unsigned long seed, float aspect_ratio) {
+    int blockSize, minGridSize;
+    cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, init_particles_kernel, 0, 0);
     int gridSize = (num_particles + blockSize - 1) / blockSize;
 
-    init_particles_kernel<<<gridSize, blockSize>>>(*d_particles, num_particles, seed);
+    init_particles_kernel<<<gridSize, blockSize>>>(*d_particles, num_particles, seed, aspect_ratio);
 
     cudaError_t error = cudaGetLastError();
     if (error != cudaSuccess) {
@@ -85,8 +53,9 @@ __global__ void assign_particles_to_cells_kernel(Particles particles, UniformGri
     float x = particles.x[idx];
     float y = particles.y[idx];
 
-    int cell_x = (int)((x + 1.0f) / grid.cell_size);
-    int cell_y = (int)((y + 1.0f) / grid.cell_size);
+    // Use grid's world bounds for cell assignment
+    int cell_x = (int)((x - grid.world_min_x) / grid.cell_size);
+    int cell_y = (int)((y - grid.world_min_y) / grid.cell_size);
 
     cell_x = max(0, min(cell_x, grid.grid_width - 1));
     cell_y = max(0, min(cell_y, grid.grid_height - 1));
@@ -124,7 +93,6 @@ __global__ void update_particles_kernel(Particles particles, UniformGrid grid,
     unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_particles) return;
 
-    // Read original state (used for all collision calculations)
     const float orig_x = particles.x[idx];
     const float orig_y = particles.y[idx];
     const float orig_vx = particles.vx[idx];
@@ -132,15 +100,15 @@ __global__ void update_particles_kernel(Particles particles, UniformGrid grid,
     float radius = particles.radius[idx];
     float mass = particles.mass[idx];
 
-    // Accumulators for collision response (applied after all collisions detected)
     float corr_x = 0.0f;
     float corr_y = 0.0f;
     float imp_vx = 0.0f;
     float imp_vy = 0.0f;
     int collision_count = 0;
 
-    int cell_x = (int)((orig_x + 1.0f) / grid.cell_size);
-    int cell_y = (int)((orig_y + 1.0f) / grid.cell_size);
+    // Use grid's world bounds for cell assignment
+    int cell_x = (int)((orig_x - grid.world_min_x) / grid.cell_size);
+    int cell_y = (int)((orig_y - grid.world_min_y) / grid.cell_size);
     cell_x = max(0, min(cell_x, grid.grid_width - 1));
     cell_y = max(0, min(cell_y, grid.grid_height - 1));
 
@@ -236,20 +204,21 @@ __global__ void update_particles_kernel(Particles particles, UniformGrid grid,
     x += vx * dt;
     y += vy * dt;
 
-    if (x - radius < -1.0f) {
-        x = -1.0f + radius;
+    // Wall collisions using grid's world bounds
+    if (x - radius < grid.world_min_x) {
+        x = grid.world_min_x + radius;
         vx = fabsf(vx);
     }
-    if (x + radius > 1.0f) {
-        x = 1.0f - radius;
+    if (x + radius > grid.world_max_x) {
+        x = grid.world_max_x - radius;
         vx = -fabsf(vx);
     }
-    if (y - radius < -1.0f) {
-        y = -1.0f + radius;
+    if (y - radius < grid.world_min_y) {
+        y = grid.world_min_y + radius;
         vy = fabsf(vy);
     }
-    if (y + radius > 1.0f) {
-        y = 1.0f - radius;
+    if (y + radius > grid.world_max_y) {
+        y = grid.world_max_y - radius;
         vy = -fabsf(vy);
     }
 
@@ -269,7 +238,9 @@ __global__ void clear_screen_kernel(float4* output, unsigned int width, unsigned
 
 __global__ void render_particles_kernel(Particles particles, unsigned int num_particles,
                                         float4* output, unsigned int width, unsigned int height,
-                                        unsigned int ref_width) {
+                                        unsigned int ref_height,
+                                        float world_min_x, float world_max_x,
+                                        float world_min_y, float world_max_y) {
     unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_particles) return;
 
@@ -279,12 +250,14 @@ __global__ void render_particles_kernel(Particles particles, unsigned int num_pa
 
     float3 color = make_float3(1.0f, 1.0f, 1.0f);
 
-    // Convert world position to screen coordinates (with proper rounding)
-    int center_x = (int)((px + 1.0f) * 0.5f * width + 0.5f);
-    int center_y = (int)((py + 1.0f) * 0.5f * height + 0.5f);
+    // Convert world position to screen coordinates using world bounds
+    float world_width = world_max_x - world_min_x;
+    float world_height = world_max_y - world_min_y;
+    int center_x = (int)((px - world_min_x) / world_width * width + 0.5f);
+    int center_y = (int)((py - world_min_y) / world_height * height + 0.5f);
 
-    // Use reference width for radius so particle pixel size stays constant across resizes
-    float pixel_radius_f = radius * ref_width * 0.5f;
+    // Use reference height for radius (Y is always [-1,1] so height is the stable reference)
+    float pixel_radius_f = radius * ref_height * 0.5f;
     int pixel_radius = (int)(pixel_radius_f + 0.5f);
     if (pixel_radius < 1) pixel_radius = 1;
 
@@ -305,41 +278,49 @@ __global__ void render_particles_kernel(Particles particles, unsigned int num_pa
 
 void update_and_render(Particles* d_particles, UniformGrid* d_grid, unsigned int num_particles,
                        float4* d_output, unsigned int width, unsigned int height,
-                       unsigned int ref_width, float dt) {
+                       unsigned int ref_height, float dt) {
 
-    LaunchConfig config = get_optimal_config();
+    int blockSize, minGridSize, gridSize;
 
+    // Grid construction
     {
-        int blockSize = config.blockSize1D;
-        int gridSize = (d_grid->num_cells + blockSize - 1) / blockSize;
+        cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, reset_grid_kernel, 0, 0);
+        gridSize = (d_grid->num_cells + blockSize - 1) / blockSize;
         reset_grid_kernel<<<gridSize, blockSize>>>(*d_grid);
 
+        cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, assign_particles_to_cells_kernel, 0, 0);
         gridSize = (num_particles + blockSize - 1) / blockSize;
         assign_particles_to_cells_kernel<<<gridSize, blockSize>>>(*d_particles, *d_grid, num_particles);
 
         thrust::sort_by_key(thrust::device, d_grid->particle_cell, d_grid->particle_cell + num_particles, d_grid->particle_indices);
 
+        cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, compute_cell_bounds_kernel, 0, 0);
+        gridSize = (num_particles + blockSize - 1) / blockSize;
         compute_cell_bounds_kernel<<<gridSize, blockSize>>>(*d_grid, num_particles);
     }
 
+    // Physics update
     {
-        int blockSize = config.blockSize1D;
-        int gridSize = (num_particles + blockSize - 1) / blockSize;
+        cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, update_particles_kernel, 0, 0);
+        gridSize = (num_particles + blockSize - 1) / blockSize;
         update_particles_kernel<<<gridSize, blockSize>>>(*d_particles, *d_grid, num_particles, dt);
     }
 
+    // Clear screen (16x16 = 256 threads)
     {
-        dim3 blockSize = config.blockSize2D;
-        dim3 gridSize((width + blockSize.x - 1) / blockSize.x,
-                      (height + blockSize.y - 1) / blockSize.y);
-        clear_screen_kernel<<<gridSize, blockSize>>>(d_output, width, height);
+        dim3 blockSize2D(16, 16);
+        dim3 gridSize2D((width + 15) / 16, (height + 15) / 16);
+        clear_screen_kernel<<<gridSize2D, blockSize2D>>>(d_output, width, height);
     }
 
+    // Render particles
     {
-        int blockSize = config.blockSize1D;
-        int gridSize = (num_particles + blockSize - 1) / blockSize;
+        cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, render_particles_kernel, 0, 0);
+        gridSize = (num_particles + blockSize - 1) / blockSize;
         render_particles_kernel<<<gridSize, blockSize>>>(*d_particles, num_particles,
-                                                         d_output, width, height, ref_width);
+                                                         d_output, width, height, ref_height,
+                                                         d_grid->world_min_x, d_grid->world_max_x,
+                                                         d_grid->world_min_y, d_grid->world_max_y);
     }
 
     cudaError_t error = cudaGetLastError();
